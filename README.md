@@ -22,6 +22,12 @@ that AgentSec-Bench detects committing an unauthorized payment approval after th
 fact is blocked by AgentGuard before the call executes at all. See
 `guard_integration_demo.py` in the AgentSec-Bench repository.
 
+## Project layout
+
+- `agentguard/policy.py` — the `ToolPolicy` model (allowed roles, value thresholds, allowed destinations per tool).
+- `agentguard/guard.py` — `AgentGuard.check()`, the runtime enforcement logic plus audit logging.
+- `test_guard.py` — test suite for the policy and enforcement logic.
+
 ## Not yet done
 
 - Integration as a proper pipeline element (currently checked explicitly, not
