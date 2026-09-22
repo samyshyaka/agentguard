@@ -1,5 +1,5 @@
 from agentguard.policy import ToolPolicy
-from agentguard.guard import AgentGuard
+from agentguard.guard import AgentGuard, ConfirmationRequiredError
 
 
 def _make_guard():
@@ -77,3 +77,29 @@ def test_enforce_raises_when_denied():
         assert False, "expected PermissionError"
     except PermissionError:
         pass
+
+
+def test_requires_confirmation_is_not_auto_allowed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    result = guard.check("wipe_database", {}, agent_role="default")
+    assert result.allowed is False
+    assert result.requires_confirmation is True
+
+
+def test_enforce_raises_confirmation_required_when_not_confirmed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    try:
+        guard.enforce("wipe_database", {}, "default", lambda: "done")
+        assert False, "expected ConfirmationRequiredError"
+    except ConfirmationRequiredError:
+        pass
+
+
+def test_enforce_runs_when_confirmed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    calls = []
+    result = guard.enforce("wipe_database", {}, "default", lambda: calls.append("ran"), confirmed=True)
+    assert calls == ["ran"]

@@ -9,9 +9,12 @@ class ToolPolicy(BaseModel):
     max_value: float | None = None  # for args like 'amount'
     allowed_destinations: list[str] | None = None  # None = not checked
     max_calls: int | None = None  # max times this tool may be called per AgentGuard session
+    requires_confirmation: bool = False  # if True, a call that passes every other check is still
+    # held for human sign-off instead of auto-running (see AgentGuard.enforce's `confirmed` arg)
 
 
 class DecisionResult(BaseModel):
     allowed: bool
     reason: str
     tool_name: str
+    requires_confirmation: bool = False
