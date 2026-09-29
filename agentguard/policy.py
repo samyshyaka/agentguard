@@ -12,6 +12,9 @@ class ToolPolicy(BaseModel):
     max_calls: int | None = None  # max times this tool may be called per AgentGuard session
     requires_confirmation: bool = False  # if True, a call that passes every other check is still
     # held for human sign-off instead of auto-running (see AgentGuard.enforce's `confirmed` arg)
+    risk_tier: str = "low"  # "low" | "medium" | "high" - "high" behaves as requires_confirmation=True
+    # automatically, even if requires_confirmation wasn't set by hand. Prefer setting this over
+    # hand-setting requires_confirmation when a tool's risk level is what's driving the approval need.
 
 
 class DecisionResult(BaseModel):
@@ -21,6 +24,7 @@ class DecisionResult(BaseModel):
     requires_confirmation: bool = False
     agent_id: str | None = None
     policy_id: str | None = None
+    risk_tier: str | None = None
 
     @property
     def decision(self) -> str:

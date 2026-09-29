@@ -51,6 +51,7 @@ class AgentGuard:
                 tool_name=tool_name,
                 agent_id=agent_id,
                 policy_id=policy.policy_id,
+                risk_tier=policy.risk_tier,
             )
             self.audit_log.append(result)
             return result
@@ -62,6 +63,7 @@ class AgentGuard:
                 tool_name=tool_name,
                 agent_id=agent_id,
                 policy_id=policy.policy_id,
+                risk_tier=policy.risk_tier,
             )
             self.audit_log.append(result)
             return result
@@ -75,6 +77,7 @@ class AgentGuard:
                         tool_name=tool_name,
                         agent_id=agent_id,
                         policy_id=policy.policy_id,
+                        risk_tier=policy.risk_tier,
                     )
                     self.audit_log.append(result)
                     return result
@@ -88,6 +91,7 @@ class AgentGuard:
                         tool_name=tool_name,
                         agent_id=agent_id,
                         policy_id=policy.policy_id,
+                        risk_tier=policy.risk_tier,
                     )
                     self.audit_log.append(result)
                     return result
@@ -101,23 +105,30 @@ class AgentGuard:
                     tool_name=tool_name,
                     agent_id=agent_id,
                     policy_id=policy.policy_id,
+                    risk_tier=policy.risk_tier,
                 )
                 self.audit_log.append(result)
                 return result
 
-        if policy.requires_confirmation:
+        if policy.requires_confirmation or policy.risk_tier == "high":
+            reason = (
+                f"'{tool_name}' passed all automatic checks but requires human confirmation before it can proceed"
+                if policy.requires_confirmation
+                else f"'{tool_name}' is tagged risk_tier='high', which requires human confirmation before it can proceed"
+            )
             result = DecisionResult(
                 allowed=False,
                 requires_confirmation=True,
-                reason=f"'{tool_name}' passed all automatic checks but requires human confirmation before it can proceed",
+                reason=reason,
                 tool_name=tool_name,
                 agent_id=agent_id,
                 policy_id=policy.policy_id,
+                risk_tier=policy.risk_tier,
             )
             self.audit_log.append(result)
             return result
 
-        result = DecisionResult(allowed=True, reason="passed all checks", tool_name=tool_name, agent_id=agent_id, policy_id=policy.policy_id)
+        result = DecisionResult(allowed=True, reason="passed all checks", tool_name=tool_name, agent_id=agent_id, policy_id=policy.policy_id, risk_tier=policy.risk_tier)
         if policy.max_calls is not None:
             self._call_counts[tool_name] = self._call_counts.get(tool_name, 0) + 1
         self.audit_log.append(result)
@@ -137,6 +148,24 @@ class AgentGuard:
         if result.requires_confirmation and not confirmed:
             raise ConfirmationRequiredError(f"AgentGuard requires confirmation for '{tool_name}': {result.reason}")
         if not result.allowed and not (result.requires_confirmation and confirmed):
+            raise PermissionError(f"AgentGuard denied '{tool_name}': {result.reason}")
+        return run(**args)
+
+    def enforce_with_approval(self, tool_name: str, args: dict, agent_role: str, run: Callable[..., object], approve: Callable[[str, dict, str | None, str], bool], agent: AgentIdentity | None = None) -> object:
+        """Like enforce(), but when a call needs confirmation, calls
+        approve(tool_name, args, agent_id, reason) right then and there to
+        get a real yes/no decision, instead of requiring the caller to
+        already have a confirmed=True in hand. approve() is where a CLI
+        prompt, a queue, or any other approval mechanism plugs in - see
+        ApprovalQueue.cli_prompt for the MVP CLI implementation."""
+        result = self.check(tool_name, args, agent_role, agent=agent)
+        if result.requires_confirmation:
+            agent_id = agent.id if agent is not None else None
+            approved = approve(tool_name, args, agent_id, result.reason)
+            if not approved:
+                raise PermissionError(f"AgentGuard: approval denied for '{tool_name}'")
+            return run(**args)
+        if not result.allowed:
             raise PermissionError(f"AgentGuard denied '{tool_name}': {result.reason}")
         return run(**args)
 
