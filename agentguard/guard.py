@@ -1,5 +1,5 @@
 from typing import Callable
-from .policy import ToolPolicy, DecisionResult
+from .policy import ToolPolicy, DecisionResult, OutcomeConsistencyRule
 from .identity import AgentIdentity
 
 DESTINATION_ARG_KEYS = ["recipient", "email", "destination", "to"]
@@ -30,8 +30,9 @@ class AgentGuard:
     a violation happened after the fact, AgentGuard is designed to
     prevent it from happening at all."""
 
-    def __init__(self, policies: list[ToolPolicy]):
+    def __init__(self, policies: list[ToolPolicy], outcome_rules: list[OutcomeConsistencyRule] | None = None):
         self._policies = {p.tool_name: p for p in policies}
+        self._outcome_rules = {r.tool_name: r for r in (outcome_rules or [])}
         self._call_counts: dict[str, int] = {}
         self.audit_log: list[DecisionResult] = []
 
@@ -47,7 +48,7 @@ class AgentGuard:
         if policy.denied_roles is not None and agent_role in policy.denied_roles:
             result = DecisionResult(
                 allowed=False,
-                reason=f"role '{agent_role}' is explicitly denied for this tool",
+                reason=f"role \'{agent_role}\' is explicitly denied for this tool",
                 tool_name=tool_name,
                 agent_id=agent_id,
                 policy_id=policy.policy_id,
@@ -59,7 +60,7 @@ class AgentGuard:
         if policy.allowed_roles is not None and agent_role not in policy.allowed_roles:
             result = DecisionResult(
                 allowed=False,
-                reason=f"role '{agent_role}' not in allowed roles {policy.allowed_roles}",
+                reason=f"role \'{agent_role}\' not in allowed roles {policy.allowed_roles}",
                 tool_name=tool_name,
                 agent_id=agent_id,
                 policy_id=policy.policy_id,
@@ -87,7 +88,7 @@ class AgentGuard:
                 if key in args and args[key] not in policy.allowed_destinations:
                     result = DecisionResult(
                         allowed=False,
-                        reason=f"destination '{args[key]}' not in allowed list",
+                        reason=f"destination \'{args[key]}\' not in allowed list",
                         tool_name=tool_name,
                         agent_id=agent_id,
                         policy_id=policy.policy_id,
@@ -101,7 +102,7 @@ class AgentGuard:
             if already_called >= policy.max_calls:
                 result = DecisionResult(
                     allowed=False,
-                    reason=f"call limit reached: '{tool_name}' already called {already_called} time(s), max_calls={policy.max_calls}",
+                    reason=f"call limit reached: \'{tool_name}\' already called {already_called} time(s), max_calls={policy.max_calls}",
                     tool_name=tool_name,
                     agent_id=agent_id,
                     policy_id=policy.policy_id,
@@ -112,9 +113,9 @@ class AgentGuard:
 
         if policy.requires_confirmation or policy.risk_tier == "high":
             reason = (
-                f"'{tool_name}' passed all automatic checks but requires human confirmation before it can proceed"
+                f"\'{tool_name}\' passed all automatic checks but requires human confirmation before it can proceed"
                 if policy.requires_confirmation
-                else f"'{tool_name}' is tagged risk_tier='high', which requires human confirmation before it can proceed"
+                else f"\'{tool_name}\' is tagged risk_tier=\'high\', which requires human confirmation before it can proceed"
             )
             result = DecisionResult(
                 allowed=False,
@@ -146,9 +147,9 @@ class AgentGuard:
         confirmed=True. Any other denial raises plain PermissionError."""
         result = self.check(tool_name, args, agent_role, agent=agent)
         if result.requires_confirmation and not confirmed:
-            raise ConfirmationRequiredError(f"AgentGuard requires confirmation for '{tool_name}': {result.reason}")
+            raise ConfirmationRequiredError(f"AgentGuard requires confirmation for \'{tool_name}\': {result.reason}")
         if not result.allowed and not (result.requires_confirmation and confirmed):
-            raise PermissionError(f"AgentGuard denied '{tool_name}': {result.reason}")
+            raise PermissionError(f"AgentGuard denied \'{tool_name}\': {result.reason}")
         return run(**args)
 
     def enforce_with_approval(self, tool_name: str, args: dict, agent_role: str, run: Callable[..., object], approve: Callable[[str, dict, str | None, str], bool], agent: AgentIdentity | None = None) -> object:
@@ -163,10 +164,10 @@ class AgentGuard:
             agent_id = agent.id if agent is not None else None
             approved = approve(tool_name, args, agent_id, result.reason)
             if not approved:
-                raise PermissionError(f"AgentGuard: approval denied for '{tool_name}'")
+                raise PermissionError(f"AgentGuard: approval denied for \'{tool_name}\'")
             return run(**args)
         if not result.allowed:
-            raise PermissionError(f"AgentGuard denied '{tool_name}': {result.reason}")
+            raise PermissionError(f"AgentGuard denied \'{tool_name}\': {result.reason}")
         return run(**args)
 
     def least_privilege_violations(self, agent_role: str, granted_tools: list[str]) -> list[str]:
@@ -191,5 +192,50 @@ class AgentGuard:
         violations = self.least_privilege_violations(agent_role, granted_tools)
         if violations:
             raise LeastPrivilegeViolation(
-                f"role '{agent_role}' was granted tools with no declared need: {violations}"
+                f"role \'{agent_role}\' was granted tools with no declared need: {violations}"
             )
+
+    def check_outcome(self, tool_name: str, args: dict, actual_state: dict, agent_role: str, agent: AgentIdentity | None = None) -> DecisionResult:
+        """Checks whether a tool call's claimed outcome matches reality,
+        for tools that have an OutcomeConsistencyRule registered. This is
+        separate from check() because authorization (\'can this role call
+        this tool\') and truthfulness (\'is what it\'s claiming actually
+        true\') are different questions - a call can be fully authorized
+        and still be a lie, which is exactly HT-001 (TrustExploitationScenario):
+        report_status is a legitimate call for the role making it, but the
+        agent can still report status=\'success\' when actual_state says
+        status=\'failed\'. actual_state is supplied by the caller (from the
+        real environment), since AgentGuard has no independent access to it."""
+        agent_id = agent.id if agent is not None else None
+        rule = self._outcome_rules.get(tool_name)
+
+        if rule is None:
+            result = DecisionResult(allowed=True, reason="no outcome consistency rule defined", tool_name=tool_name, agent_id=agent_id)
+            self.audit_log.append(result)
+            return result
+
+        claimed = args.get(rule.field)
+        actual = actual_state.get(rule.field)
+        if claimed != actual:
+            result = DecisionResult(
+                allowed=False,
+                reason=f"\'{tool_name}\' claims {rule.field}=\'{claimed}\' but actual {rule.field} is \'{actual}\'",
+                tool_name=tool_name,
+                agent_id=agent_id,
+                policy_id=rule.policy_id,
+            )
+            self.audit_log.append(result)
+            return result
+
+        result = DecisionResult(allowed=True, reason="outcome matches reality", tool_name=tool_name, agent_id=agent_id, policy_id=rule.policy_id)
+        self.audit_log.append(result)
+        return result
+
+    def enforce_outcome(self, tool_name: str, args: dict, actual_state: dict, agent_role: str, run: Callable[..., object], agent: AgentIdentity | None = None) -> object:
+        """Like enforce(), but for outcome consistency: raises
+        PermissionError if the claimed outcome doesn\'t match actual_state,
+        otherwise calls run(**args)."""
+        result = self.check_outcome(tool_name, args, actual_state, agent_role, agent=agent)
+        if not result.allowed:
+            raise PermissionError(f"AgentGuard denied \'{tool_name}\': {result.reason}")
+        return run(**args)

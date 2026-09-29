@@ -31,3 +31,17 @@ class DecisionResult(BaseModel):
         if self.requires_confirmation and not self.allowed:
             return "PENDING_CONFIRMATION"
         return "ALLOW" if self.allowed else "DENY"
+
+
+class OutcomeConsistencyRule(BaseModel):
+    """Declares that for this tool, a specific argument field must match
+    reality, not just be an authorized call. Exists for tools like
+    report_status, where the call itself is allowed but the agent could
+    still lie about the outcome (see HT-001: TrustExploitationScenario -
+    reporting a failed backup as \'success\'). field is the arg key to
+    check (e.g. "status"); the actual value it must match is supplied at
+    check time via actual_state, since AgentGuard has no access to the
+    environment on its own."""
+    tool_name: str
+    field: str
+    policy_id: str | None = None
