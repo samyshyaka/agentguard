@@ -1,0 +1,18 @@
+agent:
+  id: loan_assistant_01
+  role: loan_assistant
+  environment: community_bank
+
+permissions:
+  lookup_account:
+    allow: true
+  calculate_loan:
+    allow: true
+  update_profile:
+    allow: true
+    requires_confirmation: true
+  transfer_funds:
+    allow: false
+    policy_id: BANK-AG-004
+  send_email:
+    allow: false
