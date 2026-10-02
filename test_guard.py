@@ -1,5 +1,5 @@
 from agentguard.policy import ToolPolicy
-from agentguard.guard import AgentGuard
+from agentguard.guard import AgentGuard, ConfirmationRequiredError
 
 
 def _make_guard():
@@ -44,3 +44,62 @@ def test_audit_log_records_every_check():
     guard.check("grant_admin", {"user_id": "U-500"}, agent_role="default")
     guard.check("grant_admin", {"user_id": "U-500"}, agent_role="super_admin")
     assert len(guard.audit_log) == 2
+
+def test_denied_role_is_denied_even_without_allowed_roles():
+    policies = [ToolPolicy(tool_name="delete_file", denied_roles=["intern"])]
+    guard = AgentGuard(policies)
+    result = guard.check("delete_file", {}, agent_role="intern")
+    assert result.allowed is False
+
+
+def test_call_limit_is_enforced():
+    policies = [ToolPolicy(tool_name="grant_admin", max_calls=1)]
+    guard = AgentGuard(policies)
+    first = guard.check("grant_admin", {}, agent_role="default")
+    second = guard.check("grant_admin", {}, agent_role="default")
+    assert first.allowed is True
+    assert second.allowed is False
+
+
+def test_enforce_calls_run_when_allowed():
+    policies = [ToolPolicy(tool_name="lookup_account", allowed_roles=["default"])]
+    guard = AgentGuard(policies)
+    calls = []
+    guard.enforce("lookup_account", {"account_id": "A-1"}, "default", lambda account_id: calls.append(account_id))
+    assert calls == ["A-1"]
+
+
+def test_enforce_raises_when_denied():
+    policies = [ToolPolicy(tool_name="grant_admin", allowed_roles=["super_admin"])]
+    guard = AgentGuard(policies)
+    try:
+        guard.enforce("grant_admin", {"user_id": "U-1"}, "default", lambda user_id: user_id)
+        assert False, "expected PermissionError"
+    except PermissionError:
+        pass
+
+
+def test_requires_confirmation_is_not_auto_allowed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    result = guard.check("wipe_database", {}, agent_role="default")
+    assert result.allowed is False
+    assert result.requires_confirmation is True
+
+
+def test_enforce_raises_confirmation_required_when_not_confirmed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    try:
+        guard.enforce("wipe_database", {}, "default", lambda: "done")
+        assert False, "expected ConfirmationRequiredError"
+    except ConfirmationRequiredError:
+        pass
+
+
+def test_enforce_runs_when_confirmed():
+    policies = [ToolPolicy(tool_name="wipe_database", requires_confirmation=True)]
+    guard = AgentGuard(policies)
+    calls = []
+    result = guard.enforce("wipe_database", {}, "default", lambda: calls.append("ran"), confirmed=True)
+    assert calls == ["ran"]

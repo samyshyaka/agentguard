@@ -16,6 +16,18 @@ Currently implemented:
 - Runtime enforcement (`AgentGuard.check()`) that evaluates a proposed tool call
   against policy before execution
 - Audit logging of every decision, allowed or denied
+- Broader policy types: role blocklists (`denied_roles`) and per-tool call-rate
+  limits (`max_calls`), alongside the original role/value/destination checks
+- A "requires confirmation" policy type (`requires_confirmation`) for actions
+  that should never be fully automatic - a call that passes every other check
+  is still held for human sign-off instead of running immediately.
+  `AgentGuard.enforce()` raises `ConfirmationRequiredError` (a subtype of
+  `PermissionError`) until it's called again with `confirmed=True`.
+- `AgentGuard.enforce()`, a pipeline-style entry point that checks policy and
+  executes the tool call in one step (raising `PermissionError` on denial, or
+  `ConfirmationRequiredError` when human sign-off is needed first), so it can
+  be dropped directly into an agent's tool-execution loop instead of requiring
+  the caller to check() and branch manually
 
 Demonstrated integration with AgentSec-Bench: the same scripted "misbehaving" agent
 that AgentSec-Bench detects committing an unauthorized payment approval after the
@@ -24,13 +36,11 @@ fact is blocked by AgentGuard before the call executes at all. See
 
 ## Project layout
 
-- `agentguard/policy.py` — the `ToolPolicy` model (allowed roles, value thresholds, allowed destinations per tool).
-- `agentguard/guard.py` — `AgentGuard.check()`, the runtime enforcement logic plus audit logging.
-- `test_guard.py` — test suite for the policy and enforcement logic.
+- `agentguard/policy.py` - the `ToolPolicy` model (allowed roles, value thresholds, allowed destinations, call limits, and confirmation requirements per tool).
+- `agentguard/guard.py` - `AgentGuard.check()` and `AgentGuard.enforce()`, the runtime enforcement logic plus audit logging.
+- `test_guard.py` - test suite for the policy and enforcement logic.
+
 
 ## Not yet done
 
-- Integration as a proper pipeline element (currently checked explicitly, not
-  automatically inserted into an agent's execution loop)
-- Broader policy types beyond role/value/destination
 - Testing against live LLM agents rather than scripted stand-ins
